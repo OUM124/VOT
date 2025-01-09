@@ -1,23 +1,87 @@
 <template>
   <div class="dashboard">
-    <h2>Events Dashboard</h2>
-    <p v-if="!user">You are not logged in. Please log in to access the dashboard.</p>
+    <div class="dashboard-header">
+      <h2>Events Dashboard</h2>
+      <div class="search-bar">
+        <input 
+          type="search" 
+          v-model="searchTerm" 
+          placeholder="Search events..."
+          class="search-input"
+        />
+      </div>
+    </div>
+
+    <p v-if="!user" class="login-message">
+      <i class="warning-icon">⚠️</i>
+      You are not logged in. Please log in to access the dashboard.
+    </p>
     
     <div v-else>
+      <div class="dashboard-stats">
+        <div class="stat-card">
+          <h4>Total Events</h4>
+          <p>{{ events.length }}</p>
+        </div>
+        <div class="stat-card">
+          <h4>My Events</h4>
+          <p>{{ myEventsCount }}</p>
+        </div>
+        <div class="stat-card">
+          <h4>Free Events</h4>
+          <p>{{ freeEventsCount }}</p>
+        </div>
+      </div>
+
       <div class="action-bar">
+        <div class="filters">
+          <select v-model="eventFilter" class="filter-select">
+            <option value="all">All Events</option>
+            <option value="my-events">My Events</option>
+            <option value="free">Free Events</option>
+            <option value="paid">Paid Events</option>
+          </select>
+          <select v-model="sortBy" class="filter-select">
+            <option value="date">Sort by Date</option>
+            <option value="votes">Sort by Popularity</option>
+            <option value="price">Sort by Price</option>
+          </select>
+        </div>
         <router-link to="/create-event" class="create-button">
           <span class="plus-icon">+</span> Create New Event
         </router-link>
       </div>
 
       <div class="events-grid">
-        <div v-for="event in events" :key="event.id" class="event-card">
-          <img v-if="event.img" :src="event.img" :alt="event.title" class="event-image">
+        <div v-for="event in filteredAndSortedEvents" 
+             :key="event.id" 
+             class="event-card"
+             :class="{ 'my-event': event.createdBy === user.uid }">
+          <div class="event-image-container">
+            <img
+              v-if="event.img"
+              :src="event.img"
+              :alt="event.title"
+              class="event-image"
+            />
+            <div class="event-date-badge">
+              {{ formatDateBadge(event.date) }}
+            </div>
+            <span v-if="event.isFree" class="free-badge">Free</span>
+          </div>
           <div class="event-content">
             <h3>{{ event.title }}</h3>
-            <p>{{ event.description }}</p>
-            <p><strong>Date:</strong> {{ formatDate(event.date) }}</p>
-            <p><strong>Price:</strong> {{ event.isFree ? 'Free' : `$${event.Price}` }}</p>
+            <p class="event-description">{{ truncateDescription(event.description) }}</p>
+            <div class="event-details">
+              <span class="detail-item">
+                <i class="icon">📅</i>
+                {{ formatDate(event.date) }}
+              </span>
+              <span class="detail-item">
+                <i class="icon">💰</i>
+                {{ event.isFree ? 'Free' : `$${event.Price}` }}
+              </span>
+            </div>
             <div class="votes">
               <button 
                 @click="handleVote(event.id, 'yes')" 
@@ -36,12 +100,18 @@
                 👎 {{ event.noVotes || 0 }}
               </button>
             </div>
-            <p v-if="event.createdBy === user.uid" class="created-by">(Created by you)</p>
+            <div class="event-footer">
+              <span v-if="event.createdBy === user.uid" class="creator-badge">Created by you</span>
+               
+            </div>
           </div>
         </div>
       </div>
       
-      <p v-if="loading" class="loading">Loading events...</p>
+      <div v-if="loading" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p>Loading events...</p>
+      </div>
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
     </div>
   </div>
@@ -57,7 +127,8 @@ import {
   increment, 
   setDoc,
   query,
-  where
+  where,
+  
 } from 'firebase/firestore';
 
 export default {
@@ -67,45 +138,109 @@ export default {
       events: [],
       loading: true,
       errorMessage: null,
-      userVotes: {}, // Store user's votes
+      userVotes: {},
+      searchTerm: '',
+      eventFilter: 'all',
+      sortBy: 'date',
     };
+  },
+  computed: {
+    myEventsCount() {
+      return this.events.filter(event => event.createdBy === this.user?.uid).length;
+    },
+    freeEventsCount() {
+      return this.events.filter(event => event.isFree).length;
+    },
+    filteredAndSortedEvents() {
+      let filteredEvents = [...this.events];
+
+      // Apply search filter
+      if (this.searchTerm) {
+        const searchLower = this.searchTerm.toLowerCase();
+        filteredEvents = filteredEvents.filter(event => 
+          event.title.toLowerCase().includes(searchLower) ||
+          event.description.toLowerCase().includes(searchLower)
+        );
+      }
+
+      // Apply category filter
+      switch (this.eventFilter) {
+        case 'my-events':
+          filteredEvents = filteredEvents.filter(event => event.createdBy === this.user?.uid);
+          break;
+        case 'free':
+          filteredEvents = filteredEvents.filter(event => event.isFree);
+          break;
+        case 'paid':
+          filteredEvents = filteredEvents.filter(event => !event.isFree);
+          break;
+      }
+
+      // Apply sorting
+      switch (this.sortBy) {
+        case 'date':
+          filteredEvents.sort((a, b) => a.date.toDate() - b.date.toDate());
+          break;
+        case 'votes':
+          filteredEvents.sort((a, b) => (b.yesVotes || 0) - (a.yesVotes || 0));
+          break;
+        case 'price':
+          filteredEvents.sort((a, b) => {
+            if (a.isFree && b.isFree) return 0;
+            if (a.isFree) return -1;
+            if (b.isFree) return 1;
+            return a.Price - b.Price;
+          });
+          break;
+      }
+
+      return filteredEvents;
+    }
   },
   methods: {
     formatDate(date) {
-      if (date && date.toDate) {
+      if (date?.toDate) {
         return date.toDate().toLocaleString();
       }
       return '';
     },
-    
+    formatDateBadge(date) {
+      if (!date?.toDate) return '';
+      const eventDate = date.toDate();
+      return eventDate.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    },
+    truncateDescription(description) {
+      return description?.length > 100 
+        ? description.substring(0, 97) + '...' 
+        : description;
+    },
     async fetchEvents() {
-  if (!this.user) return;
-  
-  try {
-    this.loading = true;
-    this.errorMessage = null;
+      if (!this.user) return;
+      
+      try {
+        this.loading = true;
+        this.errorMessage = null;
 
-    const eventsCollection = collection(db, 'events');
-    const querySnapshot = await getDocs(eventsCollection);
-    
-    this.events = querySnapshot.docs.map(doc => {
-      const eventData = {
-        id: doc.id,
-        ...doc.data()
-      };
-      console.log('Event data:', eventData);
-      console.log('Image URL:', eventData.img);
-      return eventData;
-    });
+        const eventsCollection = collection(db, 'events');
+        const querySnapshot = await getDocs(eventsCollection);
+        
+        this.events = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
 
-    await this.fetchUserVotes();
-    this.loading = false;
-  } catch (error) {
-    console.error('Error fetching events:', error);
-    this.errorMessage = 'Error fetching events. Please try again later.';
-    this.loading = false;
-  }
-},
+        await this.fetchUserVotes();
+        this.loading = false;
+      } catch (error) {
+        console.error('Error fetching events:', error);
+        this.errorMessage = 'Error fetching events. Please try again later.';
+        this.loading = false;
+      }
+    },
     async fetchUserVotes() {
       if (!this.user) return;
 
@@ -128,52 +263,55 @@ export default {
         console.error('Error fetching user votes:', error);
       }
     },
-
     async handleVote(eventId, voteType) {
-      if (!this.user || this.hasVoted(eventId)) return;
+  if (!this.user || this.hasVoted(eventId)) return;
 
-      try {
-        // Update event document
-        const eventRef = doc(db, 'events', eventId);
-        await updateDoc(eventRef, {
-          [`${voteType}Votes`]: increment(1)
-        });
+  try {
+    // Reference to the event document
+    const eventRef = doc(db, 'events', eventId);
 
-        // Create vote record
-        const voteId = `${eventId}_${this.user.uid}`;
-        const voteRef = doc(db, 'votes', voteId);
-        await setDoc(voteRef, {
-          eventId,
-          userId: this.user.uid,
-          voteType,
-          timestamp: new Date()
-        });
+    // Update the vote count (yesVotes or noVotes) based on the voteType
+    await updateDoc(eventRef, {
+      [`${voteType}Votes`]: increment(1)
+    });
 
-        // Update local state
-        this.userVotes[eventId] = voteType;
-        
-        // Update local event count
-        const eventIndex = this.events.findIndex(e => e.id === eventId);
-        if (eventIndex !== -1) {
-          const event = this.events[eventIndex];
-          const voteField = `${voteType}Votes`;
-          this.events[eventIndex] = {
-            ...event,
-            [voteField]: (event[voteField] || 0) + 1
-          };
-        }
-      } catch (error) {
-        console.error('Error voting:', error);
-        this.errorMessage = 'Error recording vote. Please try again.';
-      }
-    },
+    // Create or update the user's vote document in the 'votes' collection
+    const voteId = `${eventId}_${this.user.uid}`; // Unique vote ID for each user-event pair
+    const voteRef = doc(db, 'votes', voteId);
+    await setDoc(voteRef, {
+      eventId,
+      userId: this.user.uid,
+      voteType,
+      timestamp: new Date()
+    });
 
+    // Update the local userVotes object to reflect the new vote
+    this.userVotes[eventId] = voteType;
+
+    // Update the local events list to reflect the new vote count
+    const eventIndex = this.events.findIndex(e => e.id === eventId);
+    if (eventIndex !== -1) {
+      const event = this.events[eventIndex];
+      const voteField = `${voteType}Votes`;
+      this.events[eventIndex] = {
+        ...event,
+        [voteField]: (event[voteField] || 0) + 1
+      };
+    }
+  } catch (error) {
+    console.error('Error voting:', error);
+    this.errorMessage = 'Error recording vote. Please try again.';
+  }
+}
+,
     hasVoted(eventId) {
       return eventId in this.userVotes;
     },
-
     userVote(eventId) {
       return this.userVotes[eventId];
+    },
+    viewEventDetails(eventId) {
+      this.$router.push(`/event/${eventId}`);
     }
   },
   watch: {
@@ -197,143 +335,266 @@ export default {
   },
 };
 </script>
-
 <style scoped>
-/* Previous styles remain the same */
 .dashboard {
+  padding: 30px;
+  min-height: 100vh;
+  background-color: #f8fafc;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.dashboard-header h2 {
+  font-size: 2.5rem;
+  color: #1e293b;
+  margin: 0;
+  font-weight: 700;
+}
+
+.search-bar {
+  flex: 1;
+  max-width: 400px;
+  margin-left: 20px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.stat-card {
+  background: white;
   padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  text-align: center;
+}
+
+.stat-card h4 {
+  margin: 0 0 10px 0;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.stat-card p {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #1e293b;
 }
 
 .action-bar {
-  margin: 20px 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  margin: 30px 0;
+}
+
+.filters {
+  display: flex;
+  gap: 15px;
+}
+
+.filter-select {
+  padding: 10px 15px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background-color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
 }
 
 .create-button {
   background-color: #3b82f6;
   color: white;
-  padding: 10px 20px;
-  border-radius: 6px;
+  padding: 12px 24px;
+  border-radius: 8px;
   text-decoration: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 500;
-  transition: background-color 0.2s;
+  font-weight: 600;
+  transition: all 0.3s ease;
 }
 
 .create-button:hover {
   background-color: #2563eb;
-}
-
-.plus-icon {
-  font-size: 1.2em;
-  font-weight: bold;
+  transform: translateY(-1px);
 }
 
 .events-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-  margin-top: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 30px;
+  margin-top: 30px;
 }
 
 .event-card {
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
   overflow: hidden;
   background: white;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease-in-out;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.event-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+}
+
+.event-card.my-event {
+  border: 2px solid #3b82f6;
+}
+
+.event-image-container {
+  position: relative;
+  height: 200px;
+  overflow: hidden;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .event-image {
   width: 100%;
-  height: 200px;
+  height: 100%;
   object-fit: cover;
+  border-radius: 12px 12px 0 0;
+  transition: transform 0.3s ease;
+}
+
+.event-image-container:hover .event-image {
+  transform: scale(1.05);
+}
+
+.event-date-badge {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+}
+
+.free-badge {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  background-color: #10b981;
+  color: white;
+  padding: 5px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
 }
 
 .event-content {
-  padding: 15px;
+  padding: 20px;
+  flex-grow: 1;
+}
+
+.event-content h3 {
+  font-size: 1.5rem;
+  margin: 0 0 10px;
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.event-description {
+  font-size: 1rem;
+  color: #64748b;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.event-details {
+  display: flex;
+  gap: 15px;
+  font-size: 0.95rem;
+  margin-bottom: 15px;
+}
+
+.detail-item {
+  display: flex;
+  align-items: center;
+  color: #4b5563;
+}
+
+.icon {
+  margin-right: 8px;
 }
 
 .votes {
   display: flex;
-  justify-content: space-between;
-  margin-top: 10px;
-}
-
-.yes-votes {
-  color: #22c55e;
-}
-
-.no-votes {
-  color: #ef4444;
-}
-
-.created-by {
-  font-size: 0.875rem;
-  color: #666;
-  margin-top: 10px;
-}
-
-.loading {
-  text-align: center;
-  margin-top: 20px;
-}
-
-.error {
-  color: #ef4444;
-  text-align: center;
-  margin-top: 20px;
-}
-
-h2 {
-  text-align: center;
-  margin-bottom: 20px;
-}
-
-h3 {
-  margin: 0 0 10px 0;
-  font-size: 1.25rem;
+  gap: 15px;
+  margin-bottom: 15px;
 }
 
 .vote-button {
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
+  padding: 10px 15px;
+  border-radius: 8px;
+  background-color: #f3f4f6;
+  border: none;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.3s ease;
+  font-weight: 600;
 }
 
-.vote-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+.vote-button:hover {
+  background-color: #e2e8f0;
 }
 
 .vote-button.voted {
-  background-color: #e5e7eb;
-  border-color: #9ca3af;
+  background-color: #3b82f6;
+  color: white;
 }
 
-.yes-vote:hover:not(:disabled) {
-  background-color: #dcfce7;
-  border-color: #22c55e;
+.details-button {
+  background-color: #3b82f6;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: all 0.3s ease;
 }
 
-.no-vote:hover:not(:disabled) {
-  background-color: #fee2e2;
-  border-color: #ef4444;
+.details-button:hover {
+  background-color: #2563eb;
+  transform: translateY(-1px);
 }
 
-.yes-vote.voted {
-  background-color: #dcfce7;
-  border-color: #22c55e;
-}
-
-.no-vote.voted {
-  background-color: #fee2e2;
-  border-color: #ef4444;
+.creator-badge {
+  background-color: #3b82f6;
+  color: white;
+  padding: 5px 10px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  margin-right: 15px;
 }
 </style>

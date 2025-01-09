@@ -35,26 +35,28 @@
         </div>
 
         <div class="form-group">
-          <label for="date">Date and Time</label>
-          <input
-            id="date"
-            v-model="formData.date"
-            type="datetime-local"
-            required
-            class="form-input"
-          >
-        </div>
+  <label for="date">Date and Time</label>
+  <input
+    id="date"
+    v-model="formData.date"
+    type="datetime-local"
+    required
+    class="form-input"
+  >
+</div>
+
 
         <div class="form-group">
-          <label for="img">Image URL</label>
-          <input
-            id="img"
-            v-model="formData.img"
-            type="url"
-            class="form-input"
-            placeholder="https://example.com/image.jpg"
-          >
-        </div>
+        <label for="img">Event Image</label>
+        <input
+          id="img"
+          type="file"
+          @change="handleImageUpload"
+          class="form-input"
+          accept="image/*"
+        >
+      </div>
+
 
         <div class="form-group checkbox">
           <input
@@ -93,7 +95,6 @@
 import { auth, db } from '../../firebase';
 import { collection, addDoc } from 'firebase/firestore';
 import { useRouter } from 'vue-router';
-
 export default {
   setup() {
     const router = useRouter();
@@ -107,7 +108,7 @@ export default {
       formData: {
         title: '',
         description: '',
-        date: '',
+        date: this.getCurrentDateTime(), // Automatically set to current date and time
         isFree: true,
         price: 0,
         img: ''
@@ -115,6 +116,20 @@ export default {
     };
   },
   methods: {
+    getCurrentDateTime() {
+      const now = new Date();
+      return now.toISOString().slice(0, 16); // Formats the date for `datetime-local`
+    },
+    async handleImageUpload(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          this.formData.img = reader.result; // Store the Base64 string
+        };
+        reader.readAsDataURL(file);
+      }
+    },
     async handleSubmit() {
       if (!auth.currentUser) {
         this.errorMessage = 'You must be logged in to create an event';
@@ -132,27 +147,26 @@ export default {
           Price: this.formData.isFree ? 0 : Number(this.formData.price),
           yesVotes: 0,
           noVotes: 0,
-          createdAt: new Date()
+          createdAt: new Date(),
         };
 
         await addDoc(collection(db, 'events'), eventData);
-        
+
         this.successMessage = 'Event created successfully! Redirecting to dashboard...';
-        
-        // Redirect after a short delay
+
         setTimeout(() => {
           this.router.push('/dashboard');
         }, 2000);
-        
       } catch (error) {
         console.error('Error creating event:', error);
         this.errorMessage = 'Error creating event. Please try again.';
       } finally {
         this.loading = false;
       }
-    }
+    },
   }
 };
+
 </script>
 
 <style scoped>
