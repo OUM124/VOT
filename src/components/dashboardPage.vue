@@ -123,10 +123,10 @@ import {
   collection, 
   getDocs, 
   doc, 
-  updateDoc, 
-  increment, 
-  setDoc,
+  
   query,
+  runTransaction,
+  serverTimestamp ,
   where,
   
 } from 'firebase/firestore';
@@ -267,28 +267,46 @@ export default {
   if (!this.user || this.hasVoted(eventId)) return;
 
   try {
-    // Reference to the event document
-    const eventRef = doc(db, 'events', eventId);
+    const voteId = `${eventId}_${this.user.uid}`;
+    
+    await runTransaction(db, async (transaction) => {
+      // Get the current event data
+      const eventRef = doc(db, 'events', eventId);
+      const eventDoc = await transaction.get(eventRef);
+      
+      if (!eventDoc.exists()) {
+        throw new Error('Event does not exist!');
+      }
 
-    // Update the vote count (yesVotes or noVotes) based on the voteType
-    await updateDoc(eventRef, {
-      [`${voteType}Votes`]: increment(1)
+      // Create vote document reference
+      const voteRef = doc(db, 'votes', voteId);
+      const voteDoc = await transaction.get(voteRef);
+      
+      // Check if user has already voted
+      if (voteDoc.exists()) {
+        throw new Error('Already voted');
+      }
+
+      // Prepare vote document
+      const voteData = {
+        eventId,
+        userId: this.user.uid,
+        voteType,
+        timestamp: serverTimestamp()
+      };
+
+      // Update event vote count
+      const currentVotes = eventDoc.data()[`${voteType}Votes`] || 0;
+      
+      // Create the vote document and update the vote count atomically
+      transaction.set(voteRef, voteData);
+      transaction.update(eventRef, {
+        [`${voteType}Votes`]: currentVotes + 1
+      });
     });
 
-    // Create or update the user's vote document in the 'votes' collection
-    const voteId = `${eventId}_${this.user.uid}`; // Unique vote ID for each user-event pair
-    const voteRef = doc(db, 'votes', voteId);
-    await setDoc(voteRef, {
-      eventId,
-      userId: this.user.uid,
-      voteType,
-      timestamp: new Date()
-    });
-
-    // Update the local userVotes object to reflect the new vote
+    // Update local state after successful transaction
     this.userVotes[eventId] = voteType;
-
-    // Update the local events list to reflect the new vote count
     const eventIndex = this.events.findIndex(e => e.id === eventId);
     if (eventIndex !== -1) {
       const event = this.events[eventIndex];
@@ -298,9 +316,15 @@ export default {
         [voteField]: (event[voteField] || 0) + 1
       };
     }
+
+    // Clear any previous error
+    this.errorMessage = null;
+    
   } catch (error) {
     console.error('Error voting:', error);
-    this.errorMessage = 'Error recording vote. Please try again.';
+    this.errorMessage = error.message === 'Already voted' 
+      ? 'You have already voted on this event.'
+      : 'Error recording vote. Please try again.';
   }
 }
 ,
